@@ -129,7 +129,7 @@ class Actor(nn.Module):
             nn.Tanh()
         )
 
-        nn.init.uniform_(self.model[-2].weight, a=-0.003, b=0.003)
+        self.model[-2].weight.data.uniform_(-0.003, 0.003)
 
     def forward(self, inputs):
         return self.model(inputs) * upper_bound
@@ -179,7 +179,7 @@ def get_critic():
 # %%
 def policy(state, noise_object):
     actor_model.eval()
-    sampled_actions = torch.squeeze(actor_model(state))
+    sampled_actions = actor_model(state).squeeze()
     actor_model.train()
 
     noise = noise_object()
@@ -240,7 +240,7 @@ for ep in range(total_episodes):
         # But not in a python notebook.
         env.render()
 
-        torch_prev_state = torch.unsqueeze(torch.tensor(prev_state), 0)
+        torch_prev_state = torch.tensor(prev_state).unsqueeze(dim=0)
 
         action = policy(torch_prev_state, ou_noise)
         # Recieve state and reward from environment.
