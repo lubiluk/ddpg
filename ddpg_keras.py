@@ -226,8 +226,6 @@ for ep in range(total_episodes):
 
         tf_prev_state = tf.expand_dims(tf.convert_to_tensor(prev_state), 0)
 
-        print(tf_prev_state)
-
         action = policy(tf_prev_state, ou_noise)
         # Recieve state and reward from environment.
         state, reward, done, info = env.step(action)
