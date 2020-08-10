@@ -79,7 +79,9 @@ class Buffer:
 
         target_actions = target_actor(next_state_batch)
         y = reward_batch + gamma * target_critic([next_state_batch, target_actions])
+        critic_model.eval()
         critic_value = critic_model([state_batch, action_batch])
+        critic_model.train()
         critic_loss = torch.mean(torch.square(y - critic_value))
 
         critic_loss.backward()
@@ -87,8 +89,12 @@ class Buffer:
 
         actor_optimizer.zero_grad()
 
+        actor_model.eval()
         actions = actor_model(state_batch)
+        actor_model.train()
+        critic_model.eval()
         critic_value = critic_model([state_batch, actions])
+        critic_model.train()
         # Used `-value` as we want to maximize the value given
         # by the critic for our actions
         actor_loss = -torch.mean(critic_value)
@@ -201,7 +207,9 @@ actor_model = get_actor()
 critic_model = get_critic()
 
 target_actor = get_actor()
+target_actor.eval()
 target_critic = get_critic()
+target_critic.eval()
 
 # Making the weights equal initially
 target_actor.load_state_dict(actor_model.state_dict())
