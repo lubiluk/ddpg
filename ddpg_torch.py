@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
+from torch_utils import *
 
 # %%
 torch.set_default_dtype(torch.float64)
@@ -68,37 +69,29 @@ class Buffer:
         batch_indices = np.random.choice(record_range, self.batch_size)
 
         # Convert to tensors
-        state_batch = torch.tensor(self.state_buffer[batch_indices])
-        action_batch = torch.tensor(self.action_buffer[batch_indices])
-        reward_batch = torch.tensor(self.reward_buffer[batch_indices])
-        next_state_batch = torch.tensor(self.next_state_buffer[batch_indices])
+        state_batch = torch.from_numpy(self.state_buffer[batch_indices])
+        action_batch = torch.from_numpy(self.action_buffer[batch_indices])
+        reward_batch = torch.from_numpy(self.reward_buffer[batch_indices])
+        next_state_batch = torch.from_numpy(self.next_state_buffer[batch_indices])
 
         # Training and updating Actor & Critic networks.
         # See Pseudo Code.
-        critic_optimizer.zero_grad()
-
         target_actions = target_actor(next_state_batch)
-        y = reward_batch + gamma * target_critic([next_state_batch, target_actions])
-        critic_model.eval()
-        critic_value = critic_model([state_batch, action_batch])
-        critic_model.train()
-        critic_loss = torch.mean(torch.square(y - critic_value))
 
+        y = reward_batch + gamma * target_critic([next_state_batch, target_actions.detach()])
+        
+        critic_optimizer.zero_grad()
+        critic_value = critic_model([state_batch, action_batch])
+        critic_loss = critic_loss_fn(critic_value, y.detach())
         critic_loss.backward()
         critic_optimizer.step()
 
         actor_optimizer.zero_grad()
-
-        actor_model.eval()
         actions = actor_model(state_batch)
-        actor_model.train()
-        critic_model.eval()
         critic_value = critic_model([state_batch, actions])
-        critic_model.train()
         # Used `-value` as we want to maximize the value given
         # by the critic for our actions
-        actor_loss = -torch.mean(critic_value)
-
+        actor_loss = -critic_value.mean()
         actor_loss.backward()
         actor_optimizer.step()
 
@@ -109,15 +102,8 @@ class Buffer:
 # This update target parameters slowly
 # Based on rate `tau`, which is much less than one.
 def update_target(tau):
-    for target_param, param in zip(target_critic.parameters(), critic_model.parameters()):
-        target_param.data.copy_(
-            param.data * tau + target_param.data * (1.0 - tau)
-        )
-
-    for target_param, param in zip(target_actor.parameters(), actor_model.parameters()):
-        target_param.data.copy_(
-            param.data * tau + target_param.data * (1.0 - tau)
-        )
+    soft_update(target_critic, critic_model, tau)
+    soft_update(target_actor, actor_model, tau)
 
 # %%
 class Actor(nn.Module):
@@ -127,15 +113,18 @@ class Actor(nn.Module):
         self.model = nn.Sequential(
             nn.Linear(num_states, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            # Layer Norm is used instead of Batch Norm,
+            # as Batch Norm does not work in the same way as in Keras
+            nn.LayerNorm(512), 
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.Linear(512, 1),
             nn.Tanh()
         )
 
         self.model[-2].weight.data.uniform_(-0.003, 0.003)
+        self.model[-2].bias.data.uniform_(-0.003, 0.003)
 
     def forward(self, inputs):
         return self.model(inputs) * upper_bound
@@ -151,25 +140,25 @@ class Critic(nn.Module):
         self.state_model = nn.Sequential(
             nn.Linear(num_states, 16),
             nn.ReLU(),
-            nn.BatchNorm1d(16),
+            nn.LayerNorm(16),
             nn.Linear(16, 32),
             nn.ReLU(),
-            nn.BatchNorm1d(32)
+            nn.LayerNorm(32)
         )
 
         self.action_model = nn.Sequential(
             nn.Linear(num_actions, 32),
             nn.ReLU(),
-            nn.BatchNorm1d(32)
+            nn.LayerNorm(32)
         )
 
         self.out_model = nn.Sequential(
             nn.Linear(64, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.Linear(512, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.Linear(512, 1)
         )
 
@@ -177,7 +166,7 @@ class Critic(nn.Module):
         model_input = self.state_model(inputs[0])
         action_input = self.action_model(inputs[1])
 
-        return self.out_model(torch.cat([model_input, action_input], dim=1))
+        return self.out_model(torch.cat((model_input, action_input), dim=1))
 
 def get_critic():
     return Critic()
@@ -188,15 +177,14 @@ def policy(state, noise_object):
     sampled_actions = actor_model(state).squeeze()
     actor_model.train()
 
-    noise = noise_object()
+    noise = torch.from_numpy(noise_object())
     # Adding noise to action
-    sampled_actions = sampled_actions.detach().numpy() + noise
+    sampled_actions = sampled_actions + noise
 
     # We make sure action is within bounds
-    legal_action = np.clip(sampled_actions, lower_bound, upper_bound)
+    legal_action = sampled_actions.clamp(lower_bound, upper_bound)
 
-    return [np.squeeze(legal_action)]
-
+    return [legal_action.squeeze().detach().numpy()]
 
 # %%
 # Hyperparameters
@@ -206,14 +194,18 @@ ou_noise = OUActionNoise(mean=np.zeros(1), std_deviation=float(std_dev) * np.one
 actor_model = get_actor()
 critic_model = get_critic()
 
+critic_loss_fn = nn.MSELoss()
+critic_loss_fn = nn.MSELoss()
+
 target_actor = get_actor()
-target_actor.eval()
 target_critic = get_critic()
+
+target_actor.eval()
 target_critic.eval()
 
 # Making the weights equal initially
-target_actor.load_state_dict(actor_model.state_dict())
-target_critic.load_state_dict(critic_model.state_dict())
+hard_update(target_actor, actor_model)
+hard_update(target_critic, critic_model)
 
 # Learning rate for actor-critic models
 critic_lr = 0.002
@@ -280,4 +272,3 @@ plt.xlabel("Episode")
 plt.ylabel("Avg. Epsiodic Reward")
 plt.show()
 
-# %%

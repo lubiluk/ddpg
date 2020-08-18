@@ -1,3 +1,5 @@
+# Source: https://keras.io/examples/rl/ddpg_pendulum/
+
 import numpy as np
 
 class OUActionNoise:
