@@ -82,7 +82,7 @@ class Buffer:
         
         critic_optimizer.zero_grad()
         critic_value = critic_model([state_batch, action_batch])
-        critic_loss = critic_loss_fn(critic_value, y.detach())
+        critic_loss = F.mse_loss(critic_value, y.detach())
         critic_loss.backward()
         critic_optimizer.step()
 
@@ -193,9 +193,6 @@ ou_noise = OUActionNoise(mean=np.zeros(1), std_deviation=float(std_dev) * np.one
 
 actor_model = get_actor()
 critic_model = get_critic()
-
-critic_loss_fn = nn.MSELoss()
-critic_loss_fn = nn.MSELoss()
 
 target_actor = get_actor()
 target_critic = get_critic()
